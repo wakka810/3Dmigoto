@@ -550,6 +550,11 @@ HRESULT WINAPI D3D11On12CreateDevice(
 	InitD311();
 	LogInfo("D3D11On12CreateDevice called.\n");
 
+	if (!_D3D11On12CreateDevice) {
+		LogInfo("  D3D11On12CreateDevice not available in real d3d11.dll (requires Windows 10+)\n");
+		return E_NOTIMPL;
+	}
+
 	return (*_D3D11On12CreateDevice)(pDevice, Flags, pFeatureLevels, FeatureLevels, ppCommandQueues, NumQueues, NodeMask, ppDevice, ppImmediateContext, pChosenFeatureLevel);
 }
 
