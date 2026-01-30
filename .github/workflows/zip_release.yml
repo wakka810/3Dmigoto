@@ -1,11 +1,8 @@
-# This workflow will build geo-11 for Release use.
-# This is a basic workflow that will only be manually triggered.
-# This is used to verify builds are successful, and for testing. Build Version will
-# be incremented for every build, and committed back to the repo.
-#
-# To make a new Release, Tag a successful build, and the release_on_tag.yml will run.
+# This workflow builds a Zip Release via manual trigger.
+# It is used to verify builds and for testing. Build Version will be incremented
+# for every build and committed back to the repo.
 
-name: HelixMod Manual Build
+name: Manual Build
 
 # Controls when the action will run. Workflow runs when manually triggered using the UI.
 on:
@@ -14,7 +11,7 @@ on:
     inputs:
       name:
         # Friendly description to be shown in the UI instead of 'name'
-        description: 'Create ZipRelease for HelixMod use'
+        description: 'Create ZipRelease artifact'
         # Default value if no value is explicitly provided
         default: 'World'
         # Input has to be provided for the workflow to run
@@ -31,7 +28,7 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - name: Checkout branch master
+    - name: Checkout repository
       uses: actions/checkout@v4
 
     - name: Show all Visual Studio installs
@@ -76,17 +73,17 @@ jobs:
 
     - name: Commit version change
       run: |
-        git config --global user.name 'CI Build'
-        git config --global user.email '3Dmigoto@bo3b.net'
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
         git pull --ff-only
         git commit -am "CI Build - ${{env.BUILD_VERSION}}"
         git push
         
-# Now we can upload the remaining artifacts as the HelixMod version.
+# Now we can upload the remaining artifacts.
 # These artifacts are for testing, and not actual Releases.
 
-    - name: Upload HelixMod build
+    - name: Upload build
       uses: actions/upload-artifact@v4
       with:
-        name: 3Dmigoto v${{env.BUILD_VERSION}}
+        name: ${{github.event.repository.name}} v${{env.BUILD_VERSION}}
         path: Zip Release\
