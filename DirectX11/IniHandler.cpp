@@ -2912,9 +2912,6 @@ static void parse_texture_override_common(const wchar_t *id,
   override->override_byte_stride =
       GetIniInt(id, L"override_byte_stride", -1, NULL);
   override->uav_byte_stride = GetIniInt(id, L"uav_byte_stride", -1, NULL);
-  if (override->override_vertex_count >= 0 || override->override_byte_stride >= 0 ||
-      override->uav_byte_stride >= 0)
-    override->vertex_limit_raise = true;
 
   if (GetIniString(id, L"Iteration", 0, setting, MAX_PATH)) {
     // TODO: This supports more iterations than the
