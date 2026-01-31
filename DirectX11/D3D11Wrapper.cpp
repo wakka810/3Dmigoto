@@ -1110,9 +1110,28 @@ HRESULT WINAPI D3D11CreateDeviceAndSwapChain(
 // library does, failing gracefully if we could not.
 
 static HMODULE nvDLL;
+static HMODULE nvPowerDLL;
 static bool nvapi_failed = false;
 typedef NvAPI_Status *(__cdecl *nvapi_QueryInterfaceType)(unsigned int offset);
 static nvapi_QueryInterfaceType nvapi_QueryInterfacePtr;
+static FARPROC nvapi_pepQueryInterfacePtr;
+
+static void LoadNvPowerApi()
+{
+	if (nvPowerDLL || nvapi_pepQueryInterfacePtr)
+		return;
+
+	nvPowerDLL = GetModuleHandleW(L"nvpowerapi.dll");
+	if (!nvPowerDLL)
+		nvPowerDLL = LoadLibraryW(L"nvpowerapi.dll");
+	if (!nvPowerDLL)
+		return;
+
+	nvapi_pepQueryInterfacePtr = GetProcAddress(nvPowerDLL, "nvapi_pepQueryInterface");
+	if (!nvapi_pepQueryInterfacePtr) {
+		LogInfo("nvpowerapi loaded but nvapi_pepQueryInterface missing\n");
+	}
+}
 
 void NvAPIOverride()
 {
@@ -1148,6 +1167,8 @@ void NvAPIOverride()
 			return;
 		}
 	}
+
+	LoadNvPowerApi();
 
 	// One shot, override custom settings.
 	intptr_t ret = (intptr_t)nvapi_QueryInterfacePtr(0xb03bb03b);

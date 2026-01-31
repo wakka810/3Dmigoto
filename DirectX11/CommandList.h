@@ -711,6 +711,17 @@ public:
 	void unmap(CommandListState *state);
 };
 
+class StoreCommand : public CommandListCommand {
+public:
+	CommandListVariable *dst_var;
+	ResourceCopyTarget src;
+	ResourceCopyOptions options;
+	UINT byte_offset;
+
+	StoreCommand();
+	void run(CommandListState*) override;
+};
+
 class CommandListToken {
 public:
 	wstring token;

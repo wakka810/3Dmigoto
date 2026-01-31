@@ -2067,7 +2067,50 @@ override_resource_desc_common_2d_3d(DescType *desc,
 }
 
 static void override_resource_desc(D3D11_BUFFER_DESC *desc,
-                                   TextureOverride *textureOverride) {}
+                                   TextureOverride *textureOverride) {
+  if (!desc || !textureOverride)
+    return;
+
+  if (!textureOverride->vertex_limit_raise &&
+      textureOverride->override_vertex_count < 0 &&
+      textureOverride->override_byte_stride < 0 &&
+      textureOverride->uav_byte_stride < 0)
+    return;
+
+  if (textureOverride->override_vertex_count > 0) {
+    if (textureOverride->override_byte_stride > 0) {
+      uint64_t new_byte_width =
+          (uint64_t)textureOverride->override_vertex_count *
+          (uint64_t)textureOverride->override_byte_stride;
+      if (new_byte_width > UINT32_MAX) {
+        LogInfo("  VertexLimitRaise: requested ByteWidth too large (%llu)\n",
+                new_byte_width);
+      } else if (new_byte_width > desc->ByteWidth) {
+        LogInfo("  VertexLimitRaise: resizing buffer ByteWidth %u -> %u\n",
+                desc->ByteWidth, (UINT)new_byte_width);
+        desc->ByteWidth = (UINT)new_byte_width;
+      }
+    } else {
+      LogInfo("  VertexLimitRaise: override_vertex_count set but "
+              "override_byte_stride missing\n");
+    }
+  }
+
+  if (textureOverride->uav_byte_stride > 0) {
+    if (desc->StructureByteStride !=
+        (UINT)textureOverride->uav_byte_stride) {
+      LogInfo("  VertexLimitRaise: setting UAV stride %u\n",
+              (UINT)textureOverride->uav_byte_stride);
+    }
+    desc->StructureByteStride = (UINT)textureOverride->uav_byte_stride;
+    desc->MiscFlags |= D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    if (!(desc->BindFlags & D3D11_BIND_UNORDERED_ACCESS)) {
+      LogInfo("  VertexLimitRaise: enabling UAV bind flag\n");
+      desc->BindFlags = (D3D11_BIND_FLAG)(desc->BindFlags |
+                                          D3D11_BIND_UNORDERED_ACCESS);
+    }
+  }
+}
 static void override_resource_desc(D3D11_TEXTURE1D_DESC *desc,
                                    TextureOverride *textureOverride) {}
 static void override_resource_desc(D3D11_TEXTURE2D_DESC *desc,
