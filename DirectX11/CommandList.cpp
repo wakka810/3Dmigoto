@@ -664,6 +664,8 @@ bail:
 	return false;
 }
 
+int find_local_variable(const wstring &name, CommandListScope *scope, CommandListVariable **var);
+
 static void trim_whitespace(wstring &s)
 {
 	size_t start = 0;
