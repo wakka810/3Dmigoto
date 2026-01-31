@@ -2731,6 +2731,9 @@ wchar_t *TextureOverrideIniKeys[] = {L"hash",
                                      L"height",
                                      L"width_multiply",
                                      L"height_multiply",
+                                     L"override_vertex_count",
+                                     L"override_byte_stride",
+                                     L"uav_byte_stride",
                                      L"iteration",
                                      L"filter_index",
                                      L"expand_region_copy",
@@ -2904,6 +2907,11 @@ static void parse_texture_override_common(const wchar_t *id,
   override->height = GetIniInt(id, L"Height", -1, NULL);
   override->width_multiply = GetIniFloat(id, L"width_multiply", 1.0f, NULL);
   override->height_multiply = GetIniFloat(id, L"height_multiply", 1.0f, NULL);
+  override->override_vertex_count =
+      GetIniInt(id, L"override_vertex_count", -1, NULL);
+  override->override_byte_stride =
+      GetIniInt(id, L"override_byte_stride", -1, NULL);
+  override->uav_byte_stride = GetIniInt(id, L"uav_byte_stride", -1, NULL);
 
   if (GetIniString(id, L"Iteration", 0, setting, MAX_PATH)) {
     // TODO: This supports more iterations than the
@@ -3223,6 +3231,8 @@ static void ParseTextureOverrideSections() {
         .emplace_back(); // C++ gotcha: invalidates pointers into the vector
     override = &G->mTextureOverrideMap[hash].back();
     override->ini_section = id;
+    if (wcsstr(id, L"VertexLimitRaise"))
+      override->vertex_limit_raise = true;
 
     // Important that we do *not* register the command lists yet:
     parse_texture_override_common(id, override, false);

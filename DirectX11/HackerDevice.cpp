@@ -2067,7 +2067,70 @@ override_resource_desc_common_2d_3d(DescType *desc,
 }
 
 static void override_resource_desc(D3D11_BUFFER_DESC *desc,
-                                   TextureOverride *textureOverride) {}
+                                   TextureOverride *textureOverride) {
+  const UINT kVertexLimitRaiseMinByteWidth = 8800000;
+  if (!desc || !textureOverride)
+    return;
+
+  if (!textureOverride->vertex_limit_raise &&
+      textureOverride->override_vertex_count < 0 &&
+      textureOverride->override_byte_stride < 0 &&
+      textureOverride->uav_byte_stride < 0)
+    return;
+
+  UINT original = desc->ByteWidth;
+  uint64_t target = original;
+  bool uav_requested = textureOverride->uav_byte_stride > 0;
+
+  if (textureOverride->override_vertex_count > 0 &&
+      textureOverride->override_byte_stride > 0) {
+    uint64_t new_byte_width =
+        (uint64_t)textureOverride->override_vertex_count *
+        (uint64_t)textureOverride->override_byte_stride;
+    if (new_byte_width > UINT32_MAX) {
+      LogInfo("  VertexLimitRaise: requested ByteWidth too large (%llu)\n",
+              new_byte_width);
+    } else if (new_byte_width > target) {
+      target = new_byte_width;
+      LogInfo("  VertexLimitRaise: resizing buffer ByteWidth %u -> %u\n",
+              original, (UINT)target);
+    }
+  } else if (textureOverride->override_vertex_count > 0) {
+    LogInfo("  VertexLimitRaise: override_vertex_count set but "
+            "override_byte_stride missing\n");
+  }
+
+  if (uav_requested) {
+    UINT stride = (UINT)textureOverride->uav_byte_stride;
+    if (stride) {
+      if (desc->StructureByteStride != stride)
+        LogInfo("  VertexLimitRaise: setting UAV stride %u\n", stride);
+      desc->StructureByteStride = stride;
+      desc->MiscFlags |= D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+      if (!(desc->BindFlags & D3D11_BIND_UNORDERED_ACCESS)) {
+        LogInfo("  VertexLimitRaise: enabling UAV bind flag\n");
+        desc->BindFlags = (D3D11_BIND_FLAG)(desc->BindFlags |
+                                            D3D11_BIND_UNORDERED_ACCESS);
+      }
+      if (target % stride) {
+        uint64_t aligned = (target + stride - 1) / stride * stride;
+        LogInfo("  VertexLimitRaise: aligning ByteWidth %llu -> %llu\n",
+                target, aligned);
+        target = aligned;
+      }
+    }
+  }
+
+  if (textureOverride->vertex_limit_raise &&
+      target < kVertexLimitRaiseMinByteWidth) {
+    LogInfo("  VertexLimitRaise: raising buffer ByteWidth %u -> %u\n",
+            (UINT)target, kVertexLimitRaiseMinByteWidth);
+    target = kVertexLimitRaiseMinByteWidth;
+  }
+
+  if (target > desc->ByteWidth)
+    desc->ByteWidth = (UINT)target;
+}
 static void override_resource_desc(D3D11_TEXTURE1D_DESC *desc,
                                    TextureOverride *textureOverride) {}
 static void override_resource_desc(D3D11_TEXTURE2D_DESC *desc,
@@ -2171,6 +2234,9 @@ HackerDevice::CreateBuffer(THIS_
   D3D11_BUFFER_DESC newDesc;
   const D3D11_BUFFER_DESC *pNewDesc = NULL;
   NVAPI_STEREO_SURFACECREATEMODE oldMode;
+  D3D11_SUBRESOURCE_DATA paddedInit;
+  const D3D11_SUBRESOURCE_DATA *pInit = pInitialData;
+  std::vector<uint8_t> paddedData;
 
   LogDebug("HackerDevice::CreateBuffer called\n");
   if (pDesc)
@@ -2188,7 +2254,29 @@ HackerDevice::CreateBuffer(THIS_
   pNewDesc =
       process_texture_override(hash, mStereoHandle, pDesc, &newDesc, &oldMode);
 
-  HRESULT hr = mOrigDevice1->CreateBuffer(pNewDesc, pInitialData, ppBuffer);
+  if (pInitialData && pInitialData->pSysMem && pDesc && pNewDesc &&
+      pNewDesc->ByteWidth > pDesc->ByteWidth) {
+    paddedData.resize(pNewDesc->ByteWidth);
+    memcpy(paddedData.data(), pInitialData->pSysMem, pDesc->ByteWidth);
+    paddedInit = *pInitialData;
+    paddedInit.pSysMem = paddedData.data();
+    pInit = &paddedInit;
+  }
+
+  HRESULT hr = mOrigDevice1->CreateBuffer(pNewDesc, pInit, ppBuffer);
+
+  if (FAILED(hr) && pDesc && pNewDesc &&
+      (pNewDesc->BindFlags != pDesc->BindFlags ||
+       pNewDesc->MiscFlags != pDesc->MiscFlags ||
+       pNewDesc->StructureByteStride != pDesc->StructureByteStride)) {
+    D3D11_BUFFER_DESC safeDesc = *pNewDesc;
+    safeDesc.BindFlags = pDesc->BindFlags;
+    safeDesc.MiscFlags = pDesc->MiscFlags;
+    safeDesc.StructureByteStride = pDesc->StructureByteStride;
+    LogInfo("  VertexLimitRaise: CreateBuffer failed (0x%08x), retrying without UAV flags/stride\n", hr);
+    hr = mOrigDevice1->CreateBuffer(&safeDesc, pInit, ppBuffer);
+  }
+
   restore_old_surface_create_mode(oldMode, mStereoHandle);
   if (hr == S_OK && ppBuffer && *ppBuffer) {
     EnterCriticalSectionPretty(&G->mResourcesLock);

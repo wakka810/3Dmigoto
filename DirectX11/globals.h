@@ -296,6 +296,10 @@ struct TextureOverride {
   int height;
   float width_multiply;
   float height_multiply;
+  int override_vertex_count;
+  int override_byte_stride;
+  int uav_byte_stride;
+  bool vertex_limit_raise;
   std::vector<int> iterations;
   bool expand_region_copy;
   bool deny_cpu_read;
@@ -317,9 +321,11 @@ struct TextureOverride {
 
   TextureOverride()
       : stereoMode(-1), format(-1), width(-1), height(-1), width_multiply(1.0),
-        height_multiply(1.0), expand_region_copy(false), deny_cpu_read(false),
-        filter_index(FLT_MAX), has_draw_context_match(false),
-        has_match_priority(false), priority(0) {}
+        height_multiply(1.0), override_vertex_count(-1),
+        override_byte_stride(-1), uav_byte_stride(-1),
+        vertex_limit_raise(false), expand_region_copy(false),
+        deny_cpu_read(false), filter_index(FLT_MAX),
+        has_draw_context_match(false), has_match_priority(false), priority(0) {}
 };
 
 typedef std::unordered_map<ID3D11Resource *, ResourceHandleInfo> ResourceMap;

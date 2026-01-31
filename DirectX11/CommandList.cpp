@@ -8,6 +8,7 @@
 #include <WICTextureLoader.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <sstream>
 #include "HackerDevice.h"
 #include "HackerContext.h"
@@ -663,6 +664,102 @@ bail:
 	return false;
 }
 
+int find_local_variable(const wstring &name, CommandListScope *scope, CommandListVariable **var);
+
+static void trim_whitespace(wstring &s)
+{
+	size_t start = 0;
+	while (start < s.size() && iswspace(s[start]))
+		start++;
+	size_t end = s.size();
+	while (end > start && iswspace(s[end - 1]))
+		end--;
+	if (start || end != s.size())
+		s = s.substr(start, end - start);
+}
+
+static bool ParseStoreCommand(const wchar_t *section,
+		const wchar_t *key, wstring *val,
+		CommandList *explicit_command_list,
+		CommandList *pre_command_list,
+		CommandList *post_command_list,
+		const wstring *ini_namespace)
+{
+	std::vector<wstring> parts;
+	size_t pos = 0;
+	while (pos <= val->size()) {
+		size_t comma = val->find(L',', pos);
+		if (comma == wstring::npos)
+			comma = val->size();
+		parts.push_back(val->substr(pos, comma - pos));
+		pos = comma + 1;
+		if (comma >= val->size())
+			break;
+	}
+	if (parts.size() != 3) {
+		LogOverlay(LOG_WARNING,
+			"WARNING: [%S] store expects 3 comma-separated values\n", section);
+		return false;
+	}
+
+	for (auto &p : parts)
+		trim_whitespace(p);
+
+	CommandListVariable *dst = NULL;
+	if (pre_command_list && pre_command_list->scope)
+		find_local_variable(parts[0], pre_command_list->scope, &dst);
+	if (!dst && !parse_command_list_var_name(parts[0], ini_namespace, &dst)) {
+		LogOverlay(LOG_WARNING,
+			"WARNING: [%S] store destination must be a variable: %S\n",
+			section, parts[0].c_str());
+		return false;
+	}
+
+	if (parts[1].length() >= MAX_PATH) {
+		LogOverlay(LOG_WARNING,
+			"WARNING: [%S] store source string too long\n", section);
+		return false;
+	}
+
+	wchar_t buf[MAX_PATH];
+	wchar_t *src_ptr = NULL;
+	wcsncpy_s(buf, parts[1].c_str(), MAX_PATH);
+	ResourceCopyOptions options = parse_enum_option_string<wchar_t *, ResourceCopyOptions>
+		(ResourceCopyOptionNames, buf, &src_ptr);
+
+	if (!src_ptr) {
+		LogOverlay(LOG_WARNING,
+			"WARNING: [%S] store source is missing\n", section);
+		return false;
+	}
+
+	StoreCommand *operation = new StoreCommand();
+	operation->dst_var = dst;
+	operation->options = options;
+
+	if (!operation->src.ParseTarget(src_ptr, true, ini_namespace))
+		goto bail;
+
+	const wchar_t *num = parts[2].c_str();
+	wchar_t *end = NULL;
+	long offset = wcstol(num, &end, 10);
+	if (end == num) {
+		LogOverlay(LOG_WARNING,
+			"WARNING: [%S] store offset is not a number: %S\n",
+			section, parts[2].c_str());
+		goto bail;
+	}
+	if (offset < 0)
+		offset = 0;
+	operation->byte_offset = (UINT)offset;
+
+	return AddCommandToList(operation, explicit_command_list, pre_command_list, NULL, NULL, section, key, val);
+
+bail:
+	delete operation;
+	return false;
+}
+
 static bool ParseDrawCommandArgs(wstring *val, DrawCommand *operation, bool indirect, int nargs, const wstring *ini_namespace, CommandListScope *scope)
 {
 	size_t start = 0, end;
@@ -943,6 +1040,9 @@ bool ParseCommandListGeneralCommands(const wchar_t *section,
 
 	if (!wcscmp(key, L"dump"))
 		return ParseFrameAnalysisDump(section, key, val, explicit_command_list, pre_command_list, post_command_list, ini_namespace);
+
+	if (!wcscmp(key, L"store"))
+		return ParseStoreCommand(section, key, val, explicit_command_list, pre_command_list, post_command_list, ini_namespace);
 
 	if (!wcscmp(key, L"special")) {
 		if (!wcscmp(val->c_str(), L"upscaling_switch_bb"))
@@ -7304,6 +7404,97 @@ void ResourceStagingOperation::unmap(CommandListState *state)
 {
 	if (cached_resource)
 		state->mOrigContext1->Unmap(cached_resource, 0);
+}
+
+StoreCommand::StoreCommand() :
+	dst_var(NULL),
+	options(ResourceCopyOptions::INVALID),
+	byte_offset(0)
+{
+	ini_line = L"store";
+}
+
+void StoreCommand::run(CommandListState *state)
+{
+	ID3D11Resource *resource = NULL;
+	ID3D11View *view = NULL;
+	UINT stride = 0;
+	UINT offset = 0;
+	UINT buf_size = 0;
+	DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+	D3D11_RESOURCE_DIMENSION dimension;
+	ID3D11Buffer *buffer = NULL;
+	ID3D11Buffer *staging = NULL;
+	D3D11_BUFFER_DESC desc;
+	D3D11_MAPPED_SUBRESOURCE mapped;
+	HRESULT hr;
+	UINT read_offset;
+	uint32_t value = 0;
+
+	if (!dst_var) {
+		LogInfo("StoreCommand: destination variable missing\n");
+		return;
+	}
+
+	resource = src.GetResource(state, &view, &stride, &offset, &format, &buf_size);
+	if (view)
+		view->Release();
+	if (!resource) {
+		LogInfo("StoreCommand: source resource is null\n");
+		return;
+	}
+
+	resource->GetType(&dimension);
+	if (dimension != D3D11_RESOURCE_DIMENSION_BUFFER) {
+		LogInfo("StoreCommand: source is not a buffer\n");
+		resource->Release();
+		return;
+	}
+	buffer = (ID3D11Buffer*)resource;
+
+	buffer->GetDesc(&desc);
+
+	bool use_reference = (options & ResourceCopyOptions::REFERENCE) &&
+		(desc.Usage == D3D11_USAGE_STAGING) &&
+		(desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ);
+
+	if (!use_reference) {
+		D3D11_BUFFER_DESC staging_desc = desc;
+		staging_desc.Usage = D3D11_USAGE_STAGING;
+		staging_desc.BindFlags = 0;
+		staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		staging_desc.MiscFlags = 0;
+		staging_desc.StructureByteStride = 0;
+
+		hr = state->mOrigDevice1->CreateBuffer(&staging_desc, NULL, &staging);
+		if (FAILED(hr) || !staging) {
+			LogInfo("StoreCommand: failed to create staging buffer (0x%08x)\n", hr);
+			resource->Release();
+			return;
+		}
+
+		state->mOrigContext1->CopyResource(staging, buffer);
+		buffer = staging;
+		desc = staging_desc;
+	}
+
+	hr = state->mOrigContext1->Map(buffer, 0, D3D11_MAP_READ, 0, &mapped);
+	if (SUCCEEDED(hr)) {
+		read_offset = offset + byte_offset;
+		if (read_offset + sizeof(value) <= desc.ByteWidth && mapped.pData) {
+			memcpy(&value, (uint8_t*)mapped.pData + read_offset, sizeof(value));
+			memcpy(&dst_var->fval, &value, sizeof(value));
+		} else {
+			LogInfo("StoreCommand: read offset out of range (%u)\n", read_offset);
+		}
+		state->mOrigContext1->Unmap(buffer, 0);
+	} else {
+		LogInfo("StoreCommand: Map failed (0x%08x)\n", hr);
+	}
+
+	if (staging)
+		staging->Release();
+	resource->Release();
 }
 
 static void ResolveMSAA(ID3D11Resource *dst_resource, ID3D11Resource *src_resource, CommandListState *state)
